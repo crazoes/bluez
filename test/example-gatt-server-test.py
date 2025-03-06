@@ -5,11 +5,12 @@ import dbus
 import dbus.exceptions
 import dbus.mainloop.glib
 import dbus.service
+import urllib.request
 
 import array
 from gi.repository import GLib
 import sys
-
+import subprocess
 from random import randint
 
 mainloop = None
@@ -124,18 +125,28 @@ class Characteristic(dbus.service.Object):
         return dbus.ObjectPath(self.path)
 
 class GetSettingsCharacteristic(Characteristic):
-    """
-    Characteristic for GET settings (read operation).
-    """
     CHAR_UUID = '12345678-1234-5678-1234-56789abcdef1'
 
     def __init__(self, bus, index, service):
         Characteristic.__init__(self, bus, index, self.CHAR_UUID, ['read'], service)
 
-    @dbus.service.method(GATT_CHRC_IFACE, in_signature='a{sv}', out_signature='ay')
+    @dbus.service.method(GATT_CHRC_IFACE, in_signature='', out_signature='ay')
     def ReadValue(self, options):
-        print('Reading settings (placeholder)')
-        return [dbus.Byte(0x01)]  # Placeholder value
+        url = "http://vcs1435.vcsrelay.com:81/cgi-bin/GetDeviceSettings"
+
+        try:
+            # Fetch data from the URL
+            with urllib.request.urlopen(url) as response:
+                data = response.read().decode("utf-8")
+
+            print(f"Fetched Data: {data}")
+
+            # Convert string to byte array (UTF-8 encoded)
+            return list(data.encode('utf-8'))  # Returning as plain text
+
+        except Exception as e:
+            print(f"Error fetching data: {e}")
+            return []
 
 class SetSettingsCharacteristic(Characteristic):
     """
@@ -148,8 +159,22 @@ class SetSettingsCharacteristic(Characteristic):
 
     @dbus.service.method(GATT_CHRC_IFACE, in_signature='aya{sv}')
     def WriteValue(self, value, options):
-        print(f'Received write request: {value}')
+        # Convert received bytes to a hex string
+        received_data = ' '.join(f"{byte:02X}" for byte in value)  # Converts 0x02 0x03 to "02 03"
 
+        print(f"Received write request: {received_data}")
+
+        cgi_script = "/home/shreeya/upwork/bluez/test/SetDeviceSettings"
+
+        try:
+            process = subprocess.run(
+                ["bash", cgi_script], input=received_data, capture_output=True, text=True
+            )
+            print(f"CGI Output: {process.stdout}")
+            if process.stderr:
+                print(f"CGI Error: {process.stderr}")
+        except Exception as e:
+            print(f"Failed to execute CGI script: {e}")
 
 def register_app_cb():
     print('GATT application registered')

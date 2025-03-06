@@ -1,0 +1,11 @@
+#!/bin/bash
+
+echo "Content-Type: text/plain"
+echo ""
+
+# Return previously saved settings (for testing)
+if [ -f /tmp/device_settings.log ]; then
+    cat /tmp/device_settings.log
+else
+    echo "No settings found"
+fi

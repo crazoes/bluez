@@ -1,0 +1,12 @@
+#!/bin/bash
+
+echo "Content-Type: text/plain"
+echo ""
+
+# Read input from stdin instead of using $1
+read settings_data
+
+# Log received data
+echo "Received Settings: $settings_data" >> /tmp/device_settings.log
+echo "Success"
+
