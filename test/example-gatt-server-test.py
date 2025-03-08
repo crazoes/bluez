@@ -124,6 +124,10 @@ class Characteristic(dbus.service.Object):
     def get_path(self):
         return dbus.ObjectPath(self.path)
 
+    @dbus.service.signal(DBUS_PROP_IFACE, signature='sa{sv}as')
+    def PropertiesChanged(self, interface, changed, invalidated):
+        pass
+
 class GetSettingsCharacteristic(Characteristic):
     CHAR_UUID = '12345678-1234-5678-1234-56789abcdef1'
 
@@ -152,7 +156,7 @@ class GetSettingsCharacteristic(Characteristic):
             print("Finished sending all data or notifications stopped.")
             return False  # Stop calling this function
 
-        mtu_size = 20
+        mtu_size = 517  # Use the negotiated MTU size
         chunk = self.data[self.offset:self.offset + mtu_size]
         self.offset += mtu_size  # Move to the next chunk
 
@@ -182,9 +186,18 @@ class GetSettingsCharacteristic(Characteristic):
 
         self.notifying = False
 
+class InvalidArgsException(dbus.exceptions.DBusException):
+    _dbus_error_name = 'org.freedesktop.DBus.Error.InvalidArgs'
+
+
+class FailedException(dbus.exceptions.DBusException):
+    _dbus_error_name = 'org.bluez.Error.Failed'
+
+
 class SetSettingsCharacteristic(Characteristic):
     """
     Characteristic for SET settings (write operation).
+    This characteristic allows setting the `debug` parameter to `true` or `false`.
     """
     CHAR_UUID = '12345678-1234-5678-1234-56789abcdef2'
 
@@ -193,22 +206,44 @@ class SetSettingsCharacteristic(Characteristic):
 
     @dbus.service.method(GATT_CHRC_IFACE, in_signature='aya{sv}')
     def WriteValue(self, value, options):
-        # Convert received bytes to a hex string
-        received_data = ' '.join(f"{byte:02X}" for byte in value)  # Converts 0x02 0x03 to "02 03"
-
-        print(f"Received write request: {received_data}")
-
-        cgi_script = "/home/shreeya/upwork/bluez/test/SetDeviceSettings"
-
+        """
+        Handle write requests to this characteristic.
+        The expected input is a byte array containing either "debug=true" or "debug=false".
+        """
         try:
-            process = subprocess.run(
-                ["bash", cgi_script], input=received_data, capture_output=True, text=True
-            )
-            print(f"CGI Output: {process.stdout}")
-            if process.stderr:
-                print(f"CGI Error: {process.stderr}")
+            # Convert the received byte array to a string
+            received_data = ''.join(map(chr, value)).strip().lower()  # Convert bytes to string and normalize
+            print(f"Received write request (raw bytes): {value}")
+            print(f"Received write request (decoded): {received_data}")
+
+            # Validate the input
+            if received_data not in ['debug=true', 'debug=false']:
+                print("Invalid request. Only 'debug=true' or 'debug=false' are supported.")
+                raise InvalidArgsException("Invalid input. Expected 'debug=true' or 'debug=false'.")
+
+            # Construct the URL for the SetDeviceSettings CGI script
+            cgi_script = "/cgi-bin/SetDeviceSettings"
+            url = f"http://vcs1435.vcsrelay.com:81{cgi_script}?{received_data}"
+            print(f"Making request to: {url}")
+
+            # Send the request to the CGI script
+            with urllib.request.urlopen(url) as response:
+                response_data = response.read().decode('utf-8')
+                print(f"Response from server: {response_data}")
+
+                # Check if the request was successful
+                if '"success":"1"' in response_data:
+                    print(f"Successfully set {received_data}.")
+                else:
+                    print(f"Failed to set {received_data}. Server response: {response_data}")
+                    raise FailedException("Failed to update debug parameter.")
+
+        except urllib.error.URLError as e:
+            print(f"Failed to make HTTP request: {e}")
+            raise FailedException("Failed to communicate with the server.")
         except Exception as e:
-            print(f"Failed to execute CGI script: {e}")
+            print(f"Unexpected error: {e}")
+            raise FailedException("An unexpected error occurred.")
 
 def register_app_cb():
     print('GATT application registered')
@@ -242,4 +277,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
