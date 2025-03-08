@@ -128,48 +128,38 @@ class GetSettingsCharacteristic(Characteristic):
     CHAR_UUID = '12345678-1234-5678-1234-56789abcdef1'
 
     def __init__(self, bus, index, service):
-        Characteristic.__init__(self, bus, index, self.CHAR_UUID, ['read', 'notify'], service)
+        Characteristic.__init__(self, bus, index, self.CHAR_UUID, ['notify'], service)
         self.notifying = False
-        self.data = b''  # Store the fetched data here
+        self.url = "http://vcs1435.vcsrelay.com:81/cgi-bin/GetDeviceSettings"
+        self.data = b''  # Store full fetched data
+        self.offset = 0  # Track how much has been sent
 
-    @dbus.service.method(GATT_CHRC_IFACE, in_signature='', out_signature='ay')
-    def ReadValue(self, options):
-        url = "http://vcs1435.vcsrelay.com:81/cgi-bin/GetDeviceSettings"
-
+    def fetch_data(self):
+        """Fetch data from the CGI script before notifications start."""
         try:
-            # Fetch data from the URL
-            with urllib.request.urlopen(url) as response:
-                data = response.read().decode("utf-8")
-
-            print(f"Fetched Data: {data}")
-
-            # Convert string to byte array (UTF-8 encoded)
-            self.data = data.encode('utf-8')
-
-            # Send data in chunks if too large
-            if len(self.data) > 20:
-                print("Data too large, enabling notifications...")
-                self.start_notify()
-                return []  # Return an empty response to indicate data will be sent via notifications
-
-            return list(self.data)  # Returning as plain text
-
+            with urllib.request.urlopen(self.url) as response:
+                self.data = response.read()  # Read full data at once
+                self.offset = 0  # Reset offset for sending
+                print(f"Fetched {len(self.data)} bytes")
+                return True  # Successfully fetched data
         except Exception as e:
             print(f"Error fetching data: {e}")
-            return []
+            return False  # Failed to fetch
 
-    def start_notify(self):
-        """Send data in chunks via notification."""
-        if not self.notifying:
-            print("Notifications not enabled, skipping start_notify")
-            return
+    def notify_callback(self):
+        """Send the next chunk of data via notification."""
+        if not self.notifying or self.offset >= len(self.data):
+            print("Finished sending all data or notifications stopped.")
+            return False  # Stop calling this function
 
-        mtu_size = 20  # Default BLE MTU size
+        mtu_size = 20
+        chunk = self.data[self.offset:self.offset + mtu_size]
+        self.offset += mtu_size  # Move to the next chunk
 
-        for i in range(0, len(self.data), mtu_size):
-            chunk = self.data[i:i + mtu_size]
-            print(f"Sending chunk: {chunk}")
-            self.PropertiesChanged(GATT_CHRC_IFACE, {"Value": dbus.ByteArray(chunk)}, [])
+        print(f"Sending chunk: {chunk}")
+        self.PropertiesChanged(GATT_CHRC_IFACE, {"Value": dbus.ByteArray(chunk)}, [])
+
+        return True  # Continue calling this function
 
     @dbus.service.method(GATT_CHRC_IFACE)
     def StartNotify(self):
@@ -177,8 +167,12 @@ class GetSettingsCharacteristic(Characteristic):
             print('Already notifying, nothing to do')
             return
 
+        if not self.fetch_data():
+            print("Failed to fetch data, not starting notifications.")
+            return
+
         self.notifying = True
-        self.start_notify()
+        GLib.timeout_add(1000, self.notify_callback)  # Notify every second (1000ms)
 
     @dbus.service.method(GATT_CHRC_IFACE)
     def StopNotify(self):
