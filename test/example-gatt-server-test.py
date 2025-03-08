@@ -128,7 +128,9 @@ class GetSettingsCharacteristic(Characteristic):
     CHAR_UUID = '12345678-1234-5678-1234-56789abcdef1'
 
     def __init__(self, bus, index, service):
-        Characteristic.__init__(self, bus, index, self.CHAR_UUID, ['read'], service)
+        Characteristic.__init__(self, bus, index, self.CHAR_UUID, ['read', 'notify'], service)
+        self.notifying = False
+        self.data = b''  # Store the fetched data here
 
     @dbus.service.method(GATT_CHRC_IFACE, in_signature='', out_signature='ay')
     def ReadValue(self, options):
@@ -142,11 +144,49 @@ class GetSettingsCharacteristic(Characteristic):
             print(f"Fetched Data: {data}")
 
             # Convert string to byte array (UTF-8 encoded)
-            return list(data.encode('utf-8'))  # Returning as plain text
+            self.data = data.encode('utf-8')
+
+            # Send data in chunks if too large
+            if len(self.data) > 20:
+                print("Data too large, enabling notifications...")
+                self.start_notify()
+                return []  # Return an empty response to indicate data will be sent via notifications
+
+            return list(self.data)  # Returning as plain text
 
         except Exception as e:
             print(f"Error fetching data: {e}")
             return []
+
+    def start_notify(self):
+        """Send data in chunks via notification."""
+        if not self.notifying:
+            print("Notifications not enabled, skipping start_notify")
+            return
+
+        mtu_size = 20  # Default BLE MTU size
+
+        for i in range(0, len(self.data), mtu_size):
+            chunk = self.data[i:i + mtu_size]
+            print(f"Sending chunk: {chunk}")
+            self.PropertiesChanged(GATT_CHRC_IFACE, {"Value": dbus.ByteArray(chunk)}, [])
+
+    @dbus.service.method(GATT_CHRC_IFACE)
+    def StartNotify(self):
+        if self.notifying:
+            print('Already notifying, nothing to do')
+            return
+
+        self.notifying = True
+        self.start_notify()
+
+    @dbus.service.method(GATT_CHRC_IFACE)
+    def StopNotify(self):
+        if not self.notifying:
+            print('Not notifying, nothing to do')
+            return
+
+        self.notifying = False
 
 class SetSettingsCharacteristic(Characteristic):
     """
